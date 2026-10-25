@@ -1,0 +1,97 @@
+// Face Blur Tracker — шейдер размытия/пикселизации областей лиц.
+// Координаты лиц: UV, начало в левом верхнем углу, формат float4(x, y, w, h).
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float4 faces[16];
+uniform int    face_count;
+uniform int    mode;        // 0 = размытие, 1 = пикселизация, 2 = сплошной цвет
+uniform float  strength;    // 0..1
+uniform float  feather;     // 0..1, мягкость края
+uniform float  aspect;      // ширина / высота кадра
+uniform float2 texel;       // 1 / ширина, 1 / высота
+uniform float4 solid_color;
+uniform int    debug_boxes;
+
+sampler_state textureSampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float4 PSFaceBlur(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float4 result = image.Sample(textureSampler, uv);
+
+	for (int i = 0; i < 16; i++) {
+		if (i < face_count) {
+			float4 r = faces[i];
+			float2 c = r.xy + r.zw * 0.5;
+			float2 rad = max(r.zw * 0.5, float2(0.0001, 0.0001));
+			float2 d = abs((uv - c) / rad);
+
+			// «скруглённый квадрат» покрывает голову полнее, чем эллипс
+			float dist = pow(d.x * d.x * d.x + d.y * d.y * d.y, 0.33333);
+			float f = max(feather, 0.02);
+			float m = 1.0 - smoothstep(1.0 - f, 1.0, dist);
+
+			if (m > 0.0) {
+				float3 col = solid_color.rgb;
+
+				if (mode == 1) {
+					float cell = r.z * (0.04 + 0.30 * strength);
+					float2 cs = float2(cell, cell * aspect);
+					float2 p = floor((uv - r.xy) / cs) * cs + r.xy + cs * 0.5;
+					col = image.SampleLevel(textureSampler, p, 0).rgb;
+				} else if (mode == 0) {
+					float radius = r.z * (0.03 + 0.55 * strength);
+					float2 rv = float2(radius, radius * aspect);
+					float3 acc = float3(0.0, 0.0, 0.0);
+					for (int k = 0; k < 48; k++) {
+						float rr = sqrt((float(k) + 0.5) / 48.0);
+						float ang = float(k) * 2.39996323;
+						float2 o = float2(cos(ang), sin(ang)) * rr * rv;
+						acc += image.SampleLevel(textureSampler, uv + o, 0).rgb;
+					}
+					col = acc / 48.0;
+				}
+
+				result.rgb = lerp(result.rgb, col, m);
+			}
+
+			if (debug_boxes != 0) {
+				float2 q = (uv - r.xy) / max(r.zw, float2(0.0001, 0.0001));
+				float2 e = float2(2.0 * texel.x, 2.0 * texel.y) / max(r.zw, float2(0.0001, 0.0001));
+				float inside = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
+				float inner  = step(e.x, q.x) * step(q.x, 1.0 - e.x) * step(e.y, q.y) * step(q.y, 1.0 - e.y);
+				result.rgb = lerp(result.rgb, float3(0.1, 1.0, 0.2), inside * (1.0 - inner));
+			}
+		}
+	}
+
+	return result;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFaceBlur(v_in);
+	}
+}
