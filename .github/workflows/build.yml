@@ -98,7 +98,14 @@ jobs:
         run: |
           . "$env:RUNNER_TEMP\helpers.ps1"
           $deps = "$env:RUNNER_TEMP\obs-deps"; $prefix = "$env:RUNNER_TEMP\obs-prefix"
-          Invoke-Logged "plugin configure" { cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$prefix;$deps" }
+          $cfgs = Get-ChildItem $prefix -Recurse -Include "*Config.cmake","*-config.cmake" | ForEach-Object { $_.FullName.Substring($prefix.Length) }
+          Write-Host "::notice title=Installed cmake configs::$($cfgs -join ' | ')"
+          $extra = @()
+          foreach ($pkg in "libobs","w32-pthreads") {
+            $f = Get-ChildItem $prefix -Recurse -Include "${pkg}Config.cmake","${pkg}-config.cmake" | Select-Object -First 1
+            if ($f) { $extra += "-D${pkg}_DIR=$($f.DirectoryName)" }
+          }
+          Invoke-Logged "plugin configure" { cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$prefix;$deps" @extra }
           Invoke-Logged "plugin build" { cmake --build build --config Release --parallel }
 
       - name: Show plugin folder
