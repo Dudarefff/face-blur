@@ -63,29 +63,43 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\deps.zip"
           Expand-Archive "$env:RUNNER_TEMP\deps.zip" -DestinationPath "$env:RUNNER_TEMP\obs-deps"
 
+      - name: Helper for readable build errors
+        shell: pwsh
+        run: |
+          @'
+          function Invoke-Logged([string]$Title, [scriptblock]$Cmd) {
+            $log = Join-Path $env:RUNNER_TEMP ("log-" + ($Title -replace '\W','_') + ".txt")
+            & $Cmd *> $log
+            $code = $LASTEXITCODE
+            Get-Content $log | Select-Object -Last 15
+            if ($code) {
+              $errs = Select-String -Path $log -Pattern 'error|CMake Error|fatal|not found|LNK\d+' -CaseSensitive:$false |
+                      Select-Object -First 12 | ForEach-Object { $_.Line.Trim() }
+              if (-not $errs) { $errs = Get-Content $log | Select-Object -Last 12 }
+              $msg = ($errs -join "%0A")
+              Write-Host "::error title=$Title failed::$msg"
+              throw "$Title failed (exit $code)"
+            }
+          }
+          '@ | Set-Content "$env:RUNNER_TEMP\helpers.ps1"
+
       - name: Build libobs
         shell: pwsh
         run: |
+          . "$env:RUNNER_TEMP\helpers.ps1"
           $src = "$env:RUNNER_TEMP\obs-src"; $deps = "$env:RUNNER_TEMP\obs-deps"
-          $prefix = "$env:RUNNER_TEMP\obs-prefix"
-          cmake -S $src -B "$env:RUNNER_TEMP\obs-build" -G "Visual Studio 17 2022" -A x64 `
-            "-DCMAKE_PREFIX_PATH=$deps" "-DCMAKE_INSTALL_PREFIX=$prefix" `
-            -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=OFF `
-            -DENABLE_BROWSER=OFF -DENABLE_VLC=OFF -DENABLE_WEBSOCKET=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF
-          if ($LASTEXITCODE) { throw "configure failed" }
-          cmake --build "$env:RUNNER_TEMP\obs-build" --config Release --target libobs --parallel
-          if ($LASTEXITCODE) { throw "libobs build failed" }
-          cmake --install "$env:RUNNER_TEMP\obs-build" --config Release
-          if ($LASTEXITCODE) { throw "install failed" }
+          $bld = "$env:RUNNER_TEMP\obs-build"; $prefix = "$env:RUNNER_TEMP\obs-prefix"
+          Invoke-Logged "libobs configure" { cmake -S $src -B $bld -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$deps" "-DCMAKE_INSTALL_PREFIX=$prefix" -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=OFF -DENABLE_BROWSER=OFF -DENABLE_VLC=OFF -DENABLE_WEBSOCKET=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF }
+          Invoke-Logged "libobs build" { cmake --build $bld --config Release --target libobs --parallel }
+          Invoke-Logged "libobs install" { cmake --install $bld --config Release }
 
       - name: Build plugin
         shell: pwsh
         run: |
+          . "$env:RUNNER_TEMP\helpers.ps1"
           $deps = "$env:RUNNER_TEMP\obs-deps"; $prefix = "$env:RUNNER_TEMP\obs-prefix"
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$prefix;$deps"
-          if ($LASTEXITCODE) { throw "configure failed" }
-          cmake --build build --config Release --parallel
-          if ($LASTEXITCODE) { throw "build failed" }
+          Invoke-Logged "plugin configure" { cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$prefix;$deps" }
+          Invoke-Logged "plugin build" { cmake --build build --config Release --parallel }
 
       - name: Show plugin folder
         shell: pwsh
