@@ -37,3 +37,22 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${DIST_DIR}/bin/64bit/"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data" "${DIST_DIR}/data"
   COMMENT "Собираю папку плагина: ${DIST_DIR}")
+
+# Windows: рядом с плагином нужны DLL OpenCV (но не obs.dll — она уже есть в OBS)
+if(WIN32)
+  set(_opencv_dlls "")
+  foreach(_lib ${OpenCV_LIBS})
+    if(TARGET ${_lib})
+      get_target_property(_type ${_lib} TYPE)
+      if(_type STREQUAL "SHARED_LIBRARY")
+        list(APPEND _opencv_dlls "$<TARGET_FILE:${_lib}>")
+      endif()
+    endif()
+  endforeach()
+  if(_opencv_dlls)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_opencv_dlls} "${DIST_DIR}/bin/64bit/"
+      COMMAND_EXPAND_LISTS
+      COMMENT "Копирую DLL OpenCV")
+  endif()
+endif()

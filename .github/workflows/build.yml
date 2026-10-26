@@ -2,7 +2,6 @@ name: build
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -31,4 +30,68 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: obs-face-blur-linux
+          path: build/dist/obs-face-blur
+
+  windows:
+    runs-on: windows-2022
+    env:
+      OBS_VERSION: "31.1.1"
+      # OpenCV из Chocolatey (готовые бинарники, включая opencv_world*.dll)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenCV
+        shell: pwsh
+        run: |
+          choco install opencv --no-progress -y
+          $cfg = Get-ChildItem -Path C:\tools\opencv -Recurse -Filter OpenCVConfig.cmake | Select-Object -First 1
+          if (-not $cfg) { throw "OpenCVConfig.cmake not found" }
+          Write-Host "OpenCV config: $($cfg.FullName)"
+          "OpenCV_DIR=$($cfg.DirectoryName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Get OBS sources
+        shell: pwsh
+        run: git clone --depth 1 --branch $env:OBS_VERSION https://github.com/obsproject/obs-studio.git "$env:RUNNER_TEMP\obs-src"
+
+      - name: Download OBS prebuilt dependencies
+        shell: pwsh
+        run: |
+          $spec = Get-Content "$env:RUNNER_TEMP\obs-src\buildspec.json" -Raw | ConvertFrom-Json
+          $ver = $spec.dependencies.prebuilt.version
+          $url = "$($spec.dependencies.prebuilt.baseUrl)/$ver/windows-deps-$ver-x64.zip"
+          Write-Host "obs-deps: $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\deps.zip"
+          Expand-Archive "$env:RUNNER_TEMP\deps.zip" -DestinationPath "$env:RUNNER_TEMP\obs-deps"
+
+      - name: Build libobs
+        shell: pwsh
+        run: |
+          $src = "$env:RUNNER_TEMP\obs-src"; $deps = "$env:RUNNER_TEMP\obs-deps"
+          $prefix = "$env:RUNNER_TEMP\obs-prefix"
+          cmake -S $src -B "$env:RUNNER_TEMP\obs-build" -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_PREFIX_PATH=$deps" "-DCMAKE_INSTALL_PREFIX=$prefix" `
+            -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=OFF `
+            -DENABLE_BROWSER=OFF -DENABLE_VLC=OFF -DENABLE_WEBSOCKET=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF
+          if ($LASTEXITCODE) { throw "configure failed" }
+          cmake --build "$env:RUNNER_TEMP\obs-build" --config Release --target libobs --parallel
+          if ($LASTEXITCODE) { throw "libobs build failed" }
+          cmake --install "$env:RUNNER_TEMP\obs-build" --config Release
+          if ($LASTEXITCODE) { throw "install failed" }
+
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          $deps = "$env:RUNNER_TEMP\obs-deps"; $prefix = "$env:RUNNER_TEMP\obs-prefix"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$prefix;$deps"
+          if ($LASTEXITCODE) { throw "configure failed" }
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE) { throw "build failed" }
+
+      - name: Show plugin folder
+        shell: pwsh
+        run: Get-ChildItem -Recurse build\dist | Select-Object FullName, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-face-blur-windows
           path: build/dist/obs-face-blur
