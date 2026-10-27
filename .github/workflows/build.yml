@@ -93,6 +93,7 @@ jobs:
           Invoke-Logged "libobs configure" { cmake -S $src -B $bld -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$deps" "-DCMAKE_INSTALL_PREFIX=$prefix" -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF -DENABLE_SCRIPTING=OFF -DENABLE_UI=OFF -DENABLE_BROWSER=OFF -DENABLE_VLC=OFF -DENABLE_WEBSOCKET=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF }
           Invoke-Logged "libobs build" { cmake --build $bld --config Release --parallel }
           Invoke-Logged "libobs install" { cmake --install $bld --config Release }
+          Invoke-Logged "libobs install (Development)" { cmake --install $bld --config Release --component Development }
 
       - name: Build plugin
         shell: pwsh
