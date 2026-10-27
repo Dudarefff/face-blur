@@ -116,3 +116,80 @@ jobs:
         with:
           name: obs-face-blur-windows
           path: build/dist/obs-face-blur
+
+  windows:
+    runs-on: windows-2022
+    env:
+      VCPKG_TRIPLET: x64-windows-static-md
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- OpenCV (статически, чтобы плагин был одним .dll) ---
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-opencv4-core-dnn-${{ env.VCPKG_TRIPLET }}-v1
+      - name: Install OpenCV (vcpkg)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "opencv4[core,dnn]:$env:VCPKG_TRIPLET" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # --- libobs из исходников последнего релиза OBS ---
+      - name: Get OBS sources and prebuilt deps
+        shell: pwsh
+        run: |
+          $tag = gh api repos/obsproject/obs-studio/releases/latest --jq .tag_name
+          Write-Host "OBS tag: $tag"
+          git clone --depth 1 --branch $tag https://github.com/obsproject/obs-studio.git obs-studio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $spec = Get-Content obs-studio/buildspec.json -Raw | ConvertFrom-Json
+          $ver = $spec.dependencies.prebuilt.version
+          Write-Host "obs-deps: $ver"
+          $url = "https://github.com/obsproject/obs-deps/releases/download/$ver/windows-deps-$ver-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile deps.zip
+          Expand-Archive deps.zip -DestinationPath obs-deps
+          "OBS_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Build and install libobs
+        shell: pwsh
+        run: |
+          $deps = (Resolve-Path obs-deps).Path
+          cmake -S obs-studio -B build_obs -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_PREFIX_PATH=$deps" `
+            -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_FRONTEND=OFF -DENABLE_SCRIPTING=OFF `
+            -DENABLE_BROWSER=OFF -DENABLE_WEBSOCKET=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF -DENABLE_AJA=OFF `
+            -DENABLE_VLC=OFF -DENABLE_VST=OFF -DENABLE_HEVC=OFF -DENABLE_WHATSNEW=OFF -DBUILD_TESTS=OFF `
+            -DOBS_VERSION_OVERRIDE=0.0.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build_obs --config Release --target libobs --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --install build_obs --config Release --prefix "$PWD\obs_install"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # --- сам плагин ---
+      - name: Configure plugin
+        shell: pwsh
+        run: |
+          $deps = (Resolve-Path obs-deps).Path
+          $obs = (Resolve-Path obs_install).Path
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_PREFIX_PATH=$obs;$deps" `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Show result
+        shell: pwsh
+        run: Get-ChildItem -Recurse build/dist | Select-Object FullName, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-face-blur-windows
+          path: build/dist/obs-face-blur
