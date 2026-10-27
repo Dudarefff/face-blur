@@ -73,9 +73,10 @@ jobs:
             $code = $LASTEXITCODE
             Get-Content $log | Select-Object -Last 15
             if ($code) {
-              $errs = Select-String -Path $log -Pattern 'error|CMake Error|fatal|not found|LNK\d+' -CaseSensitive:$false |
-                      Select-Object -First 12 | ForEach-Object { $_.Line.Trim() }
-              if (-not $errs) { $errs = Get-Content $log | Select-Object -Last 12 }
+              $all = Get-Content $log
+              $first = ($all | Select-String -Pattern 'CMake Error|error C\d+|fatal error|LNK\d+' | Select-Object -First 1)
+              if ($first) { $errs = $all[($first.LineNumber - 1)..([Math]::Min($all.Count - 1, $first.LineNumber + 24))] | ForEach-Object { $_.Trim() } }
+              else { $errs = $all | Select-Object -Last 25 }
               $msg = ($errs -join "%0A")
               Write-Host "::error title=$Title failed::$msg"
               throw "$Title failed (exit $code)"
@@ -98,8 +99,10 @@ jobs:
         run: |
           . "$env:RUNNER_TEMP\helpers.ps1"
           $deps = "$env:RUNNER_TEMP\obs-deps"; $prefix = "$env:RUNNER_TEMP\obs-prefix"
-          $cfgs = Get-ChildItem $prefix -Recurse -Include "*Config.cmake","*-config.cmake" | ForEach-Object { $_.FullName.Substring($prefix.Length) }
-          Write-Host "::notice title=Installed cmake configs::$($cfgs -join ' | ')"
+          $files = Get-ChildItem $prefix -Recurse -File | ForEach-Object { $_.FullName.Substring($prefix.Length) }
+          Write-Host "::notice title=Files installed by libobs ($($files.Count))::$(($files | Select-Object -First 60) -join '%0A')"
+          $bcfg = Get-ChildItem "$env:RUNNER_TEMP\obs-build" -Recurse -Include "*Config.cmake","*-config.cmake","*Targets*.cmake" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($env:RUNNER_TEMP.Length) }
+          Write-Host "::notice title=cmake configs in obs build dir::$(($bcfg | Select-Object -First 30) -join '%0A')"
           $extra = @()
           foreach ($pkg in "libobs","w32-pthreads") {
             $f = Get-ChildItem $prefix -Recurse -Include "${pkg}Config.cmake","${pkg}-config.cmake" | Select-Object -First 1
